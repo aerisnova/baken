@@ -31,7 +31,22 @@ use std::collections::{BTreeMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Condvar, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+
+/// Decodes a track and measures it for the generated analysis, in place of
+/// [`generate::measure`]. A caller that plays audio through another decoder
+/// passes its own, so the waveforms sit on the same clock as its cue and grid
+/// positions.
+#[derive(Clone)]
+pub struct Measure(pub Arc<MeasureFn>);
+
+pub type MeasureFn = dyn Fn(&Path) -> anyhow::Result<Measured> + Send + Sync;
+
+impl std::fmt::Debug for Measure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Measure(..)")
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -53,6 +68,8 @@ pub struct Options {
     pub generate_analysis: bool,
     /// Delete audio and analysis on the stick that this export does not reference.
     pub prune: bool,
+    /// Decoder for generated analysis; `None` decodes with symphonia.
+    pub measure: Option<Measure>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +134,7 @@ pub struct Plan {
     pub device_name: String,
     pub cdjsafe: bool,
     pub prune: bool,
+    pub measure: Option<Measure>,
 }
 
 impl Plan {
@@ -351,6 +369,7 @@ pub fn plan(opts: &Options) -> Result<Plan> {
         device_name,
         cdjsafe: opts.cdjsafe,
         prune: opts.prune,
+        measure: opts.measure.clone(),
     })
 }
 
@@ -725,7 +744,10 @@ fn prepare_analysis(plan: &Plan, pt: &PlanTrack) -> anyhow::Result<Prepared> {
         } else {
             None
         };
-        let audio = generate::measure(&pt.source)?;
+        let audio = match &plan.measure {
+            Some(Measure(measure)) => measure(&pt.source)?,
+            None => generate::measure(&pt.source)?,
+        };
         let files = generate::build_files(
             &pt.device.track,
             &pt.device.usb_path,
