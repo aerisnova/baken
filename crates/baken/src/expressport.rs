@@ -23,6 +23,7 @@ pub fn run(args: &ExpressportArgs) -> Result<()> {
         cdjsafe: args.cdjsafe,
         generate_analysis: args.generate_analysis,
         prune: args.prune,
+        measure: None,
     };
     let plan = plan(&opts)?;
     print_plan(&plan);
