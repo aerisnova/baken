@@ -70,6 +70,9 @@ pub struct Options {
     pub prune: bool,
     /// Decoder for generated analysis; `None` decodes with symphonia.
     pub measure: Option<Measure>,
+    /// Tracks prepared in parallel; `None` is two, enough to hide symphonia's
+    /// decoding behind the copy. A slower decoder needs more.
+    pub workers: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +138,7 @@ pub struct Plan {
     pub cdjsafe: bool,
     pub prune: bool,
     pub measure: Option<Measure>,
+    pub workers: Option<usize>,
 }
 
 impl Plan {
@@ -370,6 +374,7 @@ pub fn plan(opts: &Options) -> Result<Plan> {
         cdjsafe: opts.cdjsafe,
         prune: opts.prune,
         measure: opts.measure.clone(),
+        workers: opts.workers,
     })
 }
 
@@ -467,7 +472,7 @@ pub fn export(plan: &Plan, progress: &dyn Progress, cancel: &CancelToken) -> Res
             err,
         })?;
 
-    let ahead = Ahead::new(total);
+    let ahead = Ahead::new(total, plan.workers);
     let (tx, rx) = mpsc::channel::<(usize, anyhow::Result<Prepared>)>();
     std::thread::scope(|s| {
         for _ in 0..ahead.workers {
@@ -600,11 +605,9 @@ struct Ahead {
 }
 
 impl Ahead {
-    fn new(total: usize) -> Self {
-        let workers = std::thread::available_parallelism()
-            .map_or(1, |n| n.get())
-            .clamp(1, 2)
-            .min(total.max(1));
+    fn new(total: usize, workers: Option<usize>) -> Self {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let workers = workers.unwrap_or(2).clamp(1, cores).min(total.max(1));
         Ahead {
             workers,
             window: workers * 2,
@@ -1194,7 +1197,7 @@ mod tests {
 
     #[test]
     fn ahead_hands_out_every_index_once_within_the_window() {
-        let ahead = Ahead::new(20);
+        let ahead = Ahead::new(20, None);
         let mut got = Vec::new();
         while got.len() < ahead.window {
             got.push(ahead.take().unwrap());
@@ -1208,7 +1211,7 @@ mod tests {
             got.push(i);
         }
         assert_eq!(got, (0..20).collect::<Vec<_>>());
-        let stopped = Ahead::new(5);
+        let stopped = Ahead::new(5, None);
         stopped.stop();
         assert_eq!(stopped.take(), None);
     }

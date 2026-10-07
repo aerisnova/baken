@@ -24,6 +24,7 @@ pub fn run(args: &ExpressportArgs) -> Result<()> {
         generate_analysis: args.generate_analysis,
         prune: args.prune,
         measure: None,
+        workers: None,
     };
     let plan = plan(&opts)?;
     print_plan(&plan);
