@@ -116,7 +116,7 @@ fn pqtz_from_tempo_list_matches_local_anlz() {
 /// still where `collection.xml` says (the library drive). Skips otherwise.
 #[test]
 fn waveforms_match_rekordbox_within_tolerance() {
-    use baken_export::anlz::generate::{build_files, measure};
+    use baken_export::anlz::generate::{build_files, measure, Analyzed};
     let Some(root) = fixture_root() else { return };
     let lib = Library::load(&root.join("collection.xml")).unwrap();
     let index = AnlzIndex::build(&[root.join("local-anlz")]).unwrap();
@@ -144,7 +144,7 @@ fn waveforms_match_rekordbox_within_tolerance() {
             AnlzFile::parse(&ext).unwrap(),
             AnlzFile::parse(&two).unwrap(),
         );
-        let audio = measure(source).unwrap();
+        let audio = Analyzed::from(&measure(source).unwrap());
         let [_, ours_ext, ours_two] = build_files(track, "/Contents/x.flac", &audio, None);
         compared += 1;
 

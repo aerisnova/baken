@@ -147,6 +147,35 @@ impl Measured {
     }
 }
 
+/// A measured track after [`analyze`]: the waveforms and the length, which is
+/// all the generated analysis files need from the audio. Small next to
+/// [`Measured`], so a caller can keep it and build the files again without
+/// decoding.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Analyzed {
+    pub sample_rate: u32,
+    pub channels: usize,
+    pub frames: u64,
+    pub waves: Waveforms,
+}
+
+impl From<&Measured> for Analyzed {
+    fn from(audio: &Measured) -> Self {
+        Analyzed {
+            sample_rate: audio.sample_rate,
+            channels: audio.channels,
+            frames: audio.frames,
+            waves: analyze(audio),
+        }
+    }
+}
+
+impl Analyzed {
+    pub fn duration_ms(&self) -> f64 {
+        self.frames as f64 * 1000.0 / self.sample_rate.max(1) as f64
+    }
+}
+
 /// Measures interleaved audio into columns as it arrives.
 pub struct Meter {
     sample_rate: u32,

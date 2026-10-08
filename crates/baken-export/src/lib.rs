@@ -18,7 +18,7 @@ pub use error::{Error, Result};
 
 use anlz::flac;
 use anlz::generate;
-use anlz::generate::Measured;
+use anlz::generate::Analyzed;
 use anlz::hash::AnlzSlots;
 use anlz::locate::{read_optional, AnlzIndex, Entry};
 use anlz::rewrite::{self, FileKind, Mp3Audio};
@@ -33,14 +33,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 
-/// Decodes a track and measures it for the generated analysis, in place of
-/// [`generate::measure`]. A caller that plays audio through another decoder
-/// passes its own, so the waveforms sit on the same clock as its cue and grid
-/// positions.
+/// Decodes and analyzes a track for the generated analysis, in place of
+/// [`generate::measure`] and [`Analyzed::from`]. A caller that plays audio
+/// through another decoder passes its own, so the waveforms sit on the same
+/// clock as its cue and grid positions. A caller can also keep the result and
+/// return it again without decoding.
 #[derive(Clone)]
 pub struct Measure(pub Arc<MeasureFn>);
 
-pub type MeasureFn = dyn Fn(&Path) -> anyhow::Result<Measured> + Send + Sync;
+pub type MeasureFn = dyn Fn(&Path) -> anyhow::Result<Analyzed> + Send + Sync;
 
 impl std::fmt::Debug for Measure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -749,7 +750,7 @@ fn prepare_analysis(plan: &Plan, pt: &PlanTrack) -> anyhow::Result<Prepared> {
         };
         let audio = match &plan.measure {
             Some(Measure(measure)) => measure(&pt.source)?,
-            None => generate::measure(&pt.source)?,
+            None => Analyzed::from(&generate::measure(&pt.source)?),
         };
         let files = generate::build_files(
             &pt.device.track,
@@ -941,7 +942,7 @@ fn copy_audio(src: &Path, dst: &Path) -> std::io::Result<u64> {
 /// was just decoded from (#167); a value rekordbox wrote always stays. The
 /// rules follow what rekordbox writes: MP3 the audio-frame rate, lossless the
 /// PCM rate (`1411`, `2116`, `1536`), length truncated to whole seconds.
-fn with_measured(dt: &DeviceTrack, audio: &Measured, mp3: Option<Mp3Audio>) -> DeviceTrack {
+fn with_measured(dt: &DeviceTrack, audio: &Analyzed, mp3: Option<Mp3Audio>) -> DeviceTrack {
     use pdb::rows::{FILE_TYPE_AIFF, FILE_TYPE_ALAC, FILE_TYPE_FLAC, FILE_TYPE_WAV};
     let mut dt = dt.clone();
     let secs = audio.duration_ms() / 1000.0;
@@ -1077,8 +1078,8 @@ mod tests {
     }
 
     /// 200.5 seconds of stereo at 44.1 kHz.
-    fn audio() -> Measured {
-        Measured {
+    fn audio() -> Analyzed {
+        Analyzed {
             sample_rate: 44100,
             channels: 2,
             frames: 44100 * 401 / 2,
@@ -1251,7 +1252,7 @@ mod tests {
             (48000, 256, 199)
         );
 
-        let silent = with_measured(&track(FILE_TYPE_FLAC, 16), &Measured::default(), None);
+        let silent = with_measured(&track(FILE_TYPE_FLAC, 16), &Analyzed::default(), None);
         assert_eq!((silent.sample_rate, silent.bitrate), (0, 0));
     }
 }
