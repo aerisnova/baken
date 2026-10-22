@@ -979,6 +979,9 @@ fn with_measured(dt: &DeviceTrack, audio: &Analyzed, mp3: Option<Mp3Audio>) -> D
 /// the number of files deleted. Paths are compared in NFC: on macOS 26
 /// `read_dir` lists an ExFAT or FAT stick's names in NFD whatever form they
 /// were written in, and the stick is written in the XML's NFC (issue #154).
+/// They are also compared without letter case: ExFAT and FAT ignore it, so a
+/// track whose path now differs from the stick's file only in case is that
+/// file, kept by the copy, and must not be removed as unused.
 ///
 /// A `._X` AppleDouble file is decided by its `X`: left alone while `X` stays,
 /// since a sandboxed caller may not remove it then (issue #192), and removed
@@ -998,7 +1001,7 @@ fn prune_tree(root: &Path, keep: &HashSet<PathBuf>) -> Result<usize> {
                 }
             } else if let Some(name) = entry.file_name().to_string_lossy().strip_prefix("._") {
                 sidecars.push((path.clone(), dir.join(name)));
-            } else if keep.contains(&fsname::nfc(&path)) {
+            } else if keep.contains(&prune_key(&path)) {
                 empty = false;
             } else {
                 fsname::remove_file(&path)?;
@@ -1012,12 +1015,20 @@ fn prune_tree(root: &Path, keep: &HashSet<PathBuf>) -> Result<usize> {
         }
         Ok(empty)
     }
-    let keep: HashSet<PathBuf> = keep.iter().map(|p| fsname::nfc(p)).collect();
+    let keep: HashSet<PathBuf> = keep.iter().map(|p| prune_key(p)).collect();
     let mut removed = 0;
     if root.is_dir() {
         walk(root, &keep, &mut removed)?;
     }
     Ok(removed)
+}
+
+fn prune_key(path: &Path) -> PathBuf {
+    let path = fsname::nfc(path);
+    match path.to_str() {
+        Some(s) => PathBuf::from(s.to_lowercase()),
+        None => path,
+    }
 }
 
 /// macOS leaves `._*` AppleDouble files on FAT volumes; Linux-based players trip on them.
@@ -1118,6 +1129,21 @@ mod tests {
         left.sort();
         assert_eq!(left, ["Artist/Album/._kept.wav", "Artist/Album/kept.wav"]);
         assert!(!root.join("Artist/Old").exists() && !root.join("Orphan").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// ExFAT and FAT ignore letter case, so the copy keeps a file whose track
+    /// path now differs from it only in case, and prune must keep it too.
+    #[test]
+    fn prune_keeps_a_file_whose_path_differs_only_in_case() {
+        let root = std::env::temp_dir().join(format!("baken-prune-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let file = root.join("Marc DePulse/Der Leise Raum/02-Nomenklatur.mp3");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"x").unwrap();
+        let keep = HashSet::from([root.join("Marc Depulse/Der Leise Raum/02-nomenklatur.mp3")]);
+        assert_eq!(prune_tree(&root, &keep).unwrap(), 0);
+        assert!(file.exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
