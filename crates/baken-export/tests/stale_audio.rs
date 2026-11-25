@@ -1,7 +1,7 @@
 //! Audio already on the stick stays only while it still matches its source
-//! (#231): a copy by its bytes, a `--cdjsafe` transcode by being whole and
-//! newer than the source. The `--cdjsafe` tests need ffmpeg on `PATH` and
-//! return early without it.
+//! (#231): a copy by its bytes and by being newer than the source, a
+//! `--cdjsafe` transcode by being whole and newer than the source. The
+//! `--cdjsafe` tests need ffmpeg on `PATH` and return early without it.
 
 use baken_core::CancelToken;
 use baken_export::{export, plan, Options, Report};
@@ -97,10 +97,15 @@ fn set_mtime(path: &Path, t: SystemTime) {
         .unwrap();
 }
 
+fn hours_ago(h: u64) -> SystemTime {
+    SystemTime::now() - Duration::from_secs(h * 3600)
+}
+
 #[test]
 fn a_source_changed_at_the_same_size_is_copied_again() {
     let (root, opts, source) = setup("copy", "t.wav", false);
     std::fs::write(&source, wav(3)).unwrap();
+    set_mtime(&source, hours_ago(2));
     assert_eq!(counts(&run(&opts)), (1, 0, 0));
     assert_eq!(counts(&run(&opts)), (0, 0, 1));
     let stick = on_stick(&opts);
@@ -116,11 +121,36 @@ fn a_source_changed_at_the_same_size_is_copied_again() {
 
     // a change in the middle only, away from the first and last 64 KiB
     edit(&source, len / 2..len / 2 + 4);
+    set_mtime(&source, hours_ago(2));
     assert_eq!(counts(&run(&opts)), (1, 0, 0));
     assert_eq!(
         std::fs::read(&stick).unwrap(),
         std::fs::read(&source).unwrap()
     );
+    assert_eq!(counts(&run(&opts)), (0, 0, 1));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A tag edit of the same length behind a large cover (a key "8A" made
+/// "9A") falls between the three pieces; the source's time says it changed.
+#[test]
+fn a_same_size_edit_between_the_pieces_is_copied_again() {
+    let (root, opts, source) = setup("between", "t.wav", false);
+    std::fs::write(&source, wav(3)).unwrap();
+    set_mtime(&source, hours_ago(2));
+    assert_eq!(counts(&run(&opts)), (1, 0, 0));
+    assert_eq!(counts(&run(&opts)), (0, 0, 1));
+
+    edit(&source, 100_000..100_002);
+    assert_eq!(counts(&run(&opts)), (1, 0, 0));
+    assert_eq!(
+        std::fs::read(on_stick(&opts)).unwrap(),
+        std::fs::read(&source).unwrap()
+    );
+
+    // written less than an hour after the source changed: copied once more
+    assert_eq!(counts(&run(&opts)), (1, 0, 0));
+    set_mtime(&source, hours_ago(2));
     assert_eq!(counts(&run(&opts)), (0, 0, 1));
     std::fs::remove_dir_all(&root).unwrap();
 }
@@ -146,7 +176,6 @@ fn a_cdjsafe_transcode_cut_short_or_older_than_its_source_is_made_again() {
         let _ = std::fs::remove_dir_all(&root);
         return;
     }
-    let hours_ago = |h: u64| SystemTime::now() - Duration::from_secs(h * 3600);
     assert_eq!(counts(&run(&opts)), (0, 1, 0));
     let stick = on_stick(&opts);
     let whole = std::fs::read(&stick).unwrap();
@@ -185,6 +214,7 @@ fn a_cdjsafe_copy_of_a_320_kbps_mp3_is_judged_by_its_bytes() {
         let _ = std::fs::remove_dir_all(&root);
         return;
     }
+    set_mtime(&source, hours_ago(2));
     assert_eq!(counts(&run(&opts)), (1, 0, 0));
     assert_eq!(counts(&run(&opts)), (0, 0, 1));
     let len = std::fs::read(&source).unwrap().len();
