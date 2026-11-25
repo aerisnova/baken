@@ -6,6 +6,7 @@ use baken_core::CancelToken;
 use baken_export::{export, plan, Options};
 use image::{Rgb, RgbImage};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 const FRAMES: u32 = 22050;
 
@@ -56,6 +57,17 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     out.into_inner()
 }
 
+/// A source last changed two hours ago, as a library file usually was: a
+/// stick copy is kept only when written an hour or more after its source.
+fn backdate(path: &Path) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(2 * 3600))
+        .unwrap();
+}
+
 /// Two tracks in one playlist, the first with a cover, the second without.
 fn library(name: &str) -> (PathBuf, Options) {
     let root = std::env::temp_dir().join(format!("baken-artwork-{name}-{}", std::process::id()));
@@ -66,6 +78,8 @@ fn library(name: &str) -> (PathBuf, Options) {
     }
     aiff_with_cover(&music.join("cover.aif"), &png(300, 200));
     aiff_with_cover(&music.join("plain.aif"), b"");
+    backdate(&music.join("cover.aif"));
+    backdate(&music.join("plain.aif"));
     let track = |id: u32, file: &str| {
         format!(
             r#"<TRACK TrackID="{id}" Name="{file}" Artist="A" Album="B" Kind="AIFF File" TotalTime="0" AverageBpm="120.00" SampleRate="44100" BitRate="1411" Location="file://localhost{}/{file}"><TEMPO Inizio="0.000" Bpm="120.00" Metro="4/4" Battito="1"/></TRACK>"#,

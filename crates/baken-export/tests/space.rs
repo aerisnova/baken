@@ -4,6 +4,7 @@
 use baken_core::CancelToken;
 use baken_export::{export, plan, Options};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 fn write_wav(path: &Path, secs: u32) {
     let (rate, frames) = (44100u32, 44100 * secs);
@@ -25,6 +26,17 @@ fn write_wav(path: &Path, secs: u32) {
     std::fs::write(path, b).unwrap();
 }
 
+/// A source last changed two hours ago, as a library file usually was: a
+/// stick copy is kept only when written an hour or more after its source.
+fn backdate(path: &Path) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(2 * 3600))
+        .unwrap();
+}
+
 /// Two generated tracks of 2 s, `a.wav` and `b.wav`, in one playlist.
 fn setup(name: &str) -> (PathBuf, Options) {
     let root = std::env::temp_dir().join(format!("baken-space-{name}-{}", std::process::id()));
@@ -36,6 +48,7 @@ fn setup(name: &str) -> (PathBuf, Options) {
     let mut tracks = String::new();
     for (id, name) in [(1, "a"), (2, "b")] {
         write_wav(&music.join(format!("{name}.wav")), 2);
+        backdate(&music.join(format!("{name}.wav")));
         tracks += &format!(
             r#"<TRACK TrackID="{id}" Name="{name}" Artist="A" Album="B" Kind="WAV File" TotalTime="2" AverageBpm="120.00" SampleRate="44100" BitRate="1411" Location="file://localhost{}/{name}.wav"><TEMPO Inizio="0.000" Bpm="120.00" Metro="4/4" Battito="1"/><POSITION_MARK Name="drop" Type="0" Start="1.000" Num="0"/></TRACK>"#,
             music.display()

@@ -1606,32 +1606,33 @@ fn cdjsafe_audio(plan: &Plan, pt: &PlanTrack) -> anyhow::Result<(Audio, u32, f64
     Ok((Audio::Transcoded(tmp), frames, shift))
 }
 
-/// How much later than the source's last change a transcode on the stick
-/// must have been written to be kept. FAT stores local time in 2 s steps,
-/// rounded down, which only ever makes the stick file look older. But macOS
+/// How much later than the source's last change a file on the stick must
+/// have been written to be kept, a copy or a transcode. FAT stores local
+/// time in 2 s steps, rounded down, which only ever makes the stick file
+/// look older. But macOS
 /// converts every FAT time with the UTC offset in force at that moment,
 /// whatever the file's date (measured on FSKit), so once the clocks go back
 /// an hour every file on the stick looks an hour newer than it is. A trip
 /// west across more than one time zone does the same by more and is not
-/// covered. Too large a margin costs a transcode; too small a one keeps audio
-/// the source no longer has.
-const TRANSCODE_MARGIN: Duration = Duration::from_secs(60 * 60);
+/// covered. Too large a margin costs a copy or a transcode; too small a one
+/// keeps audio or tags the source no longer has.
+const KEEP_MARGIN: Duration = Duration::from_secs(60 * 60);
 
-/// Whether `dest` was written at least [`TRANSCODE_MARGIN`] after `source`
+/// Whether `dest` was written at least [`KEEP_MARGIN`] after `source`
 /// last changed; `false` when either time cannot be read.
 fn newer_than_source(dest: &Path, source: &Path) -> bool {
     let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified());
     match (modified(dest), modified(source)) {
         (Ok(written), Ok(changed)) => written
             .duration_since(changed)
-            .is_ok_and(|d| d >= TRANSCODE_MARGIN),
+            .is_ok_and(|d| d >= KEEP_MARGIN),
         _ => false,
     }
 }
 
 /// The frames of the transcode already on the stick and the seconds it plays
 /// later than its source, when it can stay: it was written at least
-/// [`TRANSCODE_MARGIN`] after the source last changed (a headroom run, a
+/// [`KEEP_MARGIN`] after the source last changed (a headroom run, a
 /// re-rip), it says how much later it plays (up to 4.14.0 transcodes were
 /// made another way and say nothing, issue #374), and it is a whole 320 kbps
 /// CBR MP3 at 44.1 kHz, not a copy cut short by an interrupted export or a
@@ -1794,7 +1795,9 @@ fn write_track(
             size
         }
         (Audio::Source, Some(size))
-            if size == pt.device.file_size && same_pieces(&pt.source, &dest, size) =>
+            if size == pt.device.file_size
+                && (pt.source_offline || newer_than_source(&dest, &pt.source))
+                && same_pieces(&pt.source, &dest, size) =>
         {
             report.kept += 1;
             size
@@ -1898,8 +1901,10 @@ impl<'a> ArtworkIds<'a> {
 /// differs there: native MP3 and AAC gain (`baken headroom`) rewrites every
 /// frame in place, PCM gain every sample, and an edit inside the ID3 padding
 /// the start (issue #231). Three pieces rather than one, since a large cover
-/// can fill the first 64 KiB and an MP4 index the last. Comparing whole files
-/// would read every kept track back from the stick, the slow end of an export.
+/// can fill the first 64 KiB and an MP4 index the last. A same-size tag edit
+/// behind such a cover is in none of them; the file's time catches that one
+/// ([`newer_than_source`] in `write_track`). Comparing whole files would
+/// read every kept track back from the stick, the slow end of an export.
 fn same_pieces(a: &Path, b: &Path, len: u64) -> bool {
     fn pieces(path: &Path, len: u64) -> std::io::Result<Vec<u8>> {
         use std::io::{Read, Seek, SeekFrom};
