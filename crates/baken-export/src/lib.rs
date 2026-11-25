@@ -13,9 +13,17 @@ pub mod collection;
 mod error;
 pub mod layout;
 pub mod mytags;
+#[cfg(feature = "onelibrary")]
 pub mod onelibrary;
+/// Built without the `onelibrary` feature: the file name only, so an export
+/// still removes a OneLibrary it finds on the stick.
+#[cfg(not(feature = "onelibrary"))]
+pub mod onelibrary {
+    pub const FILE: &str = "exportLibrary.db";
+}
 pub mod pdb;
 pub mod settings;
+#[cfg(feature = "onelibrary")]
 mod sqlcipher;
 pub mod volume;
 
@@ -411,6 +419,10 @@ pub fn plan(opts: &Options) -> Result<Plan> {
     if !opts.device.is_dir() {
         return Err(Error::DeviceNotFound(opts.device.clone()));
     }
+    #[cfg(not(feature = "onelibrary"))]
+    if opts.onelibrary {
+        return Err(Error::NoOneLibrary);
+    }
     let volume_root = is_volume_root(&opts.device);
     let (filesystem, partition_table, partition_type) = if volume_root {
         let (fs, table) = volume::probe(&opts.device);
@@ -647,6 +659,7 @@ pub fn plan(opts: &Options) -> Result<Plan> {
     if my_tags.is_some() {
         library_lens.push(pdb::write_ext(&model).map_err(too_large)?.len() as u64);
     }
+    #[cfg(feature = "onelibrary")]
     if opts.onelibrary {
         library_lens.push(onelibrary::estimated_len(&model));
     }
@@ -1308,9 +1321,12 @@ pub fn export(plan: &Plan, progress: &dyn Progress, cancel: &CancelToken) -> Res
         report.history_plays = model.history_entries.len();
     }
     report.tracks_in_database = exported.len();
+    #[cfg(feature = "onelibrary")]
     let onelibrary = plan
         .onelibrary
         .then(|| onelibrary::write(&model, &exported));
+    #[cfg(not(feature = "onelibrary"))]
+    let onelibrary: Option<anyhow::Result<Vec<u8>>> = None;
     let pdb_path = rb_dir.join("export.pdb");
     // Beside the old one and renamed over it, so a full stick or a crash
     // leaves the stick with its old library rather than none.

@@ -29,16 +29,23 @@ symphonia.workspace = true
 # `exportLibrary.db` (OneLibrary) is a SQLCipher 4 database, built with plain
 # SQLite and encrypted page by page in `sqlcipher.rs`. SQLCipher itself needs
 # OpenSSL outside Apple, which doubled the Linux and Windows binaries (#256).
-rusqlite = { version = "0.43", features = ["bundled"] }
-getrandom = "0.4"
+rusqlite = { version = "0.43", features = ["bundled"], optional = true }
+getrandom = { version = "0.4", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 # Apple targets encrypt with CommonCrypto instead (baken-mac#83).
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
-aes = "0.9"
+aes = { version = "0.9", optional = true }
 cbc = "0.2"
 hmac = "0.13"
 sha2 = "0.11"
 pbkdf2 = "0.13"
+
+[features]
+default = ["onelibrary"]
+# OneLibrary (`exportLibrary.db`, `Options::onelibrary`). A library caller
+# that leaves it out gets an error from `plan` for `onelibrary: true`, and an
+# export still removes a OneLibrary it finds on the stick.
+onelibrary = ["dep:rusqlite", "dep:getrandom", "dep:aes"]
