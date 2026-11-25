@@ -58,9 +58,14 @@ pub fn for_file(audio: &Path) -> Option<Thumbnails> {
 }
 
 /// The embedded picture, the front cover when there are several: ID3v2
-/// `APIC` (MP3, and the ID3 chunk of AIFF), FLAC `PICTURE`, MP4 `covr`.
-/// symphonia does not read the ID3 chunk of a WAV file.
+/// `APIC` (MP3, and the ID3 chunk of AIFF and WAV), FLAC `PICTURE`, MP4
+/// `covr`.
 pub fn embedded(audio: &Path) -> Option<Vec<u8>> {
+    probed(audio).or_else(|| wav_picture(audio))
+}
+
+/// What symphonia reads, which leaves out the ID3 chunk of a WAV file.
+fn probed(audio: &Path) -> Option<Vec<u8>> {
     let file = std::fs::File::open(audio).ok()?;
     let mut hint = Hint::new();
     if let Some(ext) = audio.extension().and_then(|e| e.to_str()) {
@@ -87,6 +92,22 @@ pub fn embedded(audio: &Path) -> Option<Vec<u8>> {
         .position(|v| v.usage == Some(StandardVisualKey::FrontCover))
         .unwrap_or(0);
     visuals.into_iter().nth(front).map(|v| v.data.into_vec())
+}
+
+/// The `APIC` of a WAV file's ID3 chunk, the front cover when there are
+/// several.
+fn wav_picture(audio: &Path) -> Option<Vec<u8>> {
+    let ext = audio.extension()?.to_str()?.to_ascii_lowercase();
+    if ext != "wav" && ext != "wave" {
+        return None;
+    }
+    let tag = id3::Tag::read_from_path(audio).ok()?;
+    let pictures: Vec<&id3::frame::Picture> = tag.pictures().collect();
+    let front = pictures
+        .iter()
+        .position(|p| p.picture_type == id3::frame::PictureType::CoverFront)
+        .unwrap_or(0);
+    pictures.get(front).map(|p| p.data.clone())
 }
 
 /// `picture` (JPEG, PNG or BMP) as rekordbox's two thumbnails.
@@ -121,6 +142,8 @@ fn square(image: &RgbImage, side: u32) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use id3::frame::{Picture, PictureType};
+    use id3::TagLike;
 
     #[test]
     fn paths_follow_the_reference_stick() {
@@ -175,5 +198,49 @@ mod tests {
             );
         }
         assert!(thumbnails(b"not a picture").is_none());
+    }
+
+    /// Half a second of 16-bit stereo silence at 44.1 kHz.
+    fn wav(path: &Path) {
+        let data_len: u32 = 22050 * 4;
+        let mut b = b"RIFF".to_vec();
+        b.extend_from_slice(&(36 + data_len).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&44100u32.to_le_bytes());
+        b.extend_from_slice(&(44100u32 * 4).to_le_bytes());
+        b.extend_from_slice(&4u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&data_len.to_le_bytes());
+        b.resize(b.len() + data_len as usize, 0);
+        std::fs::write(path, b).unwrap();
+    }
+
+    fn picture(picture_type: PictureType, data: &[u8]) -> Picture {
+        Picture {
+            mime_type: "image/png".into(),
+            picture_type,
+            description: String::new(),
+            data: data.to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_wav_gives_the_front_cover_of_its_id3_chunk() {
+        let dir = std::env::temp_dir().join(format!("baken-wav-art-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.wav");
+        wav(&path);
+        assert_eq!(embedded(&path), None);
+
+        let mut tag = id3::Tag::new();
+        tag.add_frame(picture(PictureType::CoverBack, b"back"));
+        tag.add_frame(picture(PictureType::CoverFront, b"front"));
+        tag.write_to_path(&path, id3::Version::Id3v24).unwrap();
+        assert_eq!(embedded(&path).as_deref(), Some(&b"front"[..]));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
