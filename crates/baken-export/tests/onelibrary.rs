@@ -83,6 +83,19 @@ fn left(opts: &Options) -> Vec<&'static str> {
         .collect()
 }
 
+/// Without the feature, the option is an error from the plan.
+#[cfg(not(feature = "onelibrary"))]
+#[test]
+fn without_the_feature_the_option_fails_the_plan() {
+    let (root, mut opts) = rekordbox_stick("nofeature");
+    opts.onelibrary = true;
+    assert!(matches!(
+        plan(&opts),
+        Err(baken_export::Error::NoOneLibrary)
+    ));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn the_plan_lists_them_and_leaves_them_alone() {
     let (root, opts) = rekordbox_stick("plan");
@@ -159,6 +172,7 @@ fn a_file_that_cannot_be_removed_is_counted_and_the_run_goes_on() {
 
 /// `--onelibrary` (#139): rekordbox's database is replaced by ours, its
 /// write-ahead log and `exportExt.pdb` go.
+#[cfg(feature = "onelibrary")]
 #[test]
 fn with_the_option_the_database_is_replaced() {
     let (root, mut opts) = rekordbox_stick("replace");
@@ -188,6 +202,7 @@ fn with_the_option_the_database_is_replaced() {
 
 /// A write-ahead log that cannot be removed would be replayed into the new
 /// database, so none is written and the run goes on as without the option.
+#[cfg(feature = "onelibrary")]
 #[test]
 fn a_stale_log_that_stays_keeps_the_database_off_the_stick() {
     let (root, mut opts) = rekordbox_stick("stale-log");
@@ -217,6 +232,7 @@ const MY_TAGS: &str =
 
 /// `--my-tags` (#281): rekordbox's `exportExt.pdb` is replaced by ours and
 /// stays, with or without `--onelibrary`.
+#[cfg(feature = "onelibrary")]
 #[test]
 fn with_my_tags_export_ext_is_replaced() {
     let (root, mut opts) = rekordbox_stick("my-tags");

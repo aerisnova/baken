@@ -70,6 +70,11 @@ pub enum Error {
     #[error("Every track failed, so the stick keeps the library it had:{}", failed_tracks(.failures))]
     AllTracksFailed { failures: Vec<crate::Failure> },
 
+    /// [`Options::onelibrary`](crate::Options::onelibrary) in a build
+    /// without the `onelibrary` feature.
+    #[error("This build cannot write OneLibrary (built without the onelibrary feature)")]
+    NoOneLibrary,
+
     #[error("Device path is not a directory: {}", .0.display())]
     DeviceNotFound(PathBuf),
 
