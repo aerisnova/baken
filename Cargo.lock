@@ -140,6 +140,7 @@ dependencies = [
  "cbc",
  "getrandom 0.4.3",
  "hmac",
+ "id3",
  "image",
  "jpeg-encoder",
  "libc",

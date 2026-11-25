@@ -26,6 +26,8 @@ miniz_oxide = "0.9"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp"] }
 jpeg-encoder = "0.7"
 symphonia.workspace = true
+# The ID3 chunk of a WAV file, which symphonia does not read (artwork.rs).
+id3 = "1.17"
 # `exportLibrary.db` (OneLibrary) is a SQLCipher 4 database, built with plain
 # SQLite and encrypted page by page in `sqlcipher.rs`. SQLCipher itself needs
 # OpenSSL outside Apple, which doubled the Linux and Windows binaries (#256).
