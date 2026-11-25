@@ -1,7 +1,7 @@
 //! Whole `.DAT`, `.EXT` and `.2EX` files from decoded audio and the XML track.
 
 use super::grid;
-use super::waveform::{self, Measured};
+use super::waveform::Analyzed;
 use crate::anlz::cues::{self, Kind};
 use crate::anlz::section::{section, AnlzFile, Section};
 use crate::collection::Track;
@@ -32,10 +32,10 @@ fn file(sections: Vec<Section>) -> AnlzFile {
 pub fn build_files(
     track: &Track,
     usb_path: &str,
-    audio: &Measured,
+    audio: &Analyzed,
     mp3_audio_frames: Option<u32>,
 ) -> [AnlzFile; 3] {
-    let waves = waveform::analyze(audio);
+    let waves = &audio.waves;
     let bpm = track.grid_bpm();
     let mut dat = vec![
         pvbr(mp3_audio_frames),
@@ -70,9 +70,9 @@ mod tests {
 
     #[test]
     fn section_order_matches_rekordbox() {
-        let mut meter = waveform::Meter::new(44100, 2);
+        let mut meter = super::super::waveform::Meter::new(44100, 2);
         meter.push(&[0.1; 44100 * 2]);
-        let audio = meter.finish();
+        let audio = Analyzed::from(&meter.finish());
         let track = Track {
             tempos: vec![Tempo {
                 inizio: 0.1,
