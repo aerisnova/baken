@@ -28,6 +28,8 @@ pub fn run(args: &ExpressportArgs) -> Result<()> {
         artwork: args.artwork,
         my_tags: args.my_tags.clone(),
         browse: args.browse.clone(),
+        measure: None,
+        workers: None,
     };
     let plan = plan(&opts)?;
     print_plan(&plan);

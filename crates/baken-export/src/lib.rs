@@ -23,7 +23,7 @@ pub use error::{Error, Result};
 
 use anlz::flac;
 use anlz::generate;
-use anlz::generate::Measured;
+use anlz::generate::Analyzed;
 use anlz::hash::AnlzSlots;
 use anlz::locate::{read_optional, AnlzIndex, Entry};
 use anlz::rewrite::{self, FileKind, Mp3Audio};
@@ -38,8 +38,24 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Condvar, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
+
+/// Decodes and analyzes a track for the generated analysis, in place of
+/// [`generate::measure`] and [`Analyzed::from`]. A caller that plays audio
+/// through another decoder passes its own, so the waveforms sit on the same
+/// clock as its cue and grid positions. A caller can also keep the result and
+/// return it again without decoding.
+#[derive(Clone)]
+pub struct Measure(pub Arc<MeasureFn>);
+
+pub type MeasureFn = dyn Fn(&Path) -> anyhow::Result<Analyzed> + Send + Sync;
+
+impl std::fmt::Debug for Measure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Measure(..)")
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -74,6 +90,12 @@ pub struct Options {
     /// A browse file (issue #311, format in [`browse`]): the categories a
     /// player lists and the keys it sorts by, in place of the stick's.
     pub browse: Option<PathBuf>,
+    /// Decoder for generated analysis; `None` decodes with symphonia. A
+    /// `--cdjsafe` transcode is always measured with symphonia.
+    pub measure: Option<Measure>,
+    /// Tracks prepared in parallel; `None` is two, enough to hide symphonia's
+    /// decoding behind the copy. A slower decoder needs more.
+    pub workers: Option<usize>,
 }
 
 /// Why [`plan`] left a track out. `Display` gives the English sentence the
@@ -239,6 +261,10 @@ pub struct Plan {
     /// [`Options::browse`], read and checked; [`Plan::preferences`] already
     /// holds its lists.
     pub browse: Option<browse::Browse>,
+    /// [`Options::measure`].
+    pub measure: Option<Measure>,
+    /// [`Options::workers`].
+    pub workers: Option<usize>,
 }
 
 impl Plan {
@@ -688,6 +714,8 @@ pub fn plan(opts: &Options) -> Result<Plan> {
         artwork: opts.artwork,
         my_tags,
         browse,
+        measure: opts.measure.clone(),
+        workers: opts.workers,
     })
 }
 
@@ -1172,7 +1200,7 @@ pub fn export(plan: &Plan, progress: &dyn Progress, cancel: &CancelToken) -> Res
     // the workers stop preparing, and `export.pdb` stays as it was.
     let mut stopped = None;
     let mut artwork_ids = ArtworkIds::new(&plan.artwork_ids);
-    let ahead = Ahead::new(total);
+    let ahead = Ahead::new(total, plan.workers);
     let (tx, rx) = mpsc::channel::<(usize, anyhow::Result<Prepared>)>();
     std::thread::scope(|s| {
         for _ in 0..ahead.workers {
@@ -1415,11 +1443,9 @@ struct Ahead {
 }
 
 impl Ahead {
-    fn new(total: usize) -> Self {
-        let workers = std::thread::available_parallelism()
-            .map_or(1, |n| n.get())
-            .clamp(1, 2)
-            .min(total.max(1));
+    fn new(total: usize, workers: Option<usize>) -> Self {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let workers = workers.unwrap_or(2).clamp(1, cores).min(total.max(1));
         Ahead {
             workers,
             window: workers * 2,
@@ -1663,7 +1689,10 @@ fn prepare_analysis(plan: &Plan, pt: &PlanTrack, shift: f64) -> anyhow::Result<P
         } else {
             None
         };
-        let audio = generate::measure_delayed(&pt.source, shift)?;
+        let audio = match &plan.measure {
+            Some(Measure(measure)) if shift == 0.0 => measure(&pt.source)?,
+            _ => Analyzed::from(&generate::measure_delayed(&pt.source, shift)?),
+        };
         let mut files =
             generate::build_files(&track, &pt.device.usb_path, &audio, mp3.map(|m| m.frames));
         if pt.device.file_type == pdb::rows::FILE_TYPE_FLAC {
@@ -1997,7 +2026,7 @@ fn copy_audio(src: &Path, dst: &Path) -> anyhow::Result<u64> {
 /// was just decoded from (#167); a value rekordbox wrote always stays. The
 /// rules follow what rekordbox writes: MP3 the audio-frame rate, lossless the
 /// PCM rate (`1411`, `2116`, `1536`), length truncated to whole seconds.
-fn with_measured(dt: &DeviceTrack, audio: &Measured, mp3: Option<Mp3Audio>) -> DeviceTrack {
+fn with_measured(dt: &DeviceTrack, audio: &Analyzed, mp3: Option<Mp3Audio>) -> DeviceTrack {
     use pdb::rows::{FILE_TYPE_AIFF, FILE_TYPE_ALAC, FILE_TYPE_FLAC, FILE_TYPE_WAV};
     let mut dt = dt.clone();
     let secs = audio.duration_ms() / 1000.0;
@@ -2184,8 +2213,8 @@ mod tests {
     }
 
     /// 200.5 seconds of stereo at 44.1 kHz.
-    fn audio() -> Measured {
-        Measured {
+    fn audio() -> Analyzed {
+        Analyzed {
             sample_rate: 44100,
             channels: 2,
             frames: 44100 * 401 / 2,
@@ -2593,7 +2622,7 @@ mod tests {
             b.extend_from_slice(&v.to_le_bytes());
         }
         std::fs::write(&wav, b).unwrap();
-        let audio = generate::measure(&wav).unwrap();
+        let audio = Analyzed::from(&generate::measure(&wav).unwrap());
         std::fs::remove_dir_all(&dir).unwrap();
 
         let cue = |num: i32, start: f64| collection::Cue {
@@ -2651,7 +2680,7 @@ mod tests {
 
     #[test]
     fn ahead_hands_out_every_index_once_within_the_window() {
-        let ahead = Ahead::new(20);
+        let ahead = Ahead::new(20, None);
         let mut got = Vec::new();
         while got.len() < ahead.window {
             got.push(ahead.take().unwrap());
@@ -2665,7 +2694,7 @@ mod tests {
             got.push(i);
         }
         assert_eq!(got, (0..20).collect::<Vec<_>>());
-        let stopped = Ahead::new(5);
+        let stopped = Ahead::new(5, None);
         stopped.stop();
         assert_eq!(stopped.take(), None);
     }
@@ -2706,7 +2735,7 @@ mod tests {
             (48000, 256, 199)
         );
 
-        let silent = with_measured(&track(FILE_TYPE_FLAC, 16), &Measured::default(), None);
+        let silent = with_measured(&track(FILE_TYPE_FLAC, 16), &Analyzed::default(), None);
         assert_eq!((silent.sample_rate, silent.bitrate), (0, 0));
     }
 }
